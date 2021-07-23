@@ -55,7 +55,7 @@ const normalizeOptions = (options = {}) => {
     url.pathname = 'api/v0'
   }
 
-  if (isNode) {
+  if (isNode || opts.agent) {
     const Agent = url.protocol.startsWith('https') ? https.Agent : http.Agent
 
     agent = opts.agent || new Agent({
@@ -143,6 +143,7 @@ class Client extends HTTP {
     const opts = normalizeOptions(options)
 
     super({
+      ...opts,
       timeout: parseTimeout(opts.timeout || 0) || 60000 * 20,
       headers: opts.headers,
       base: `${opts.url}`,

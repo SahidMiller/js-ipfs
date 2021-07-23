@@ -3,6 +3,7 @@
 const Hapi = require('@hapi/hapi')
 const Pino = require('hapi-pino')
 const debug = require('debug')
+const mergeOptions = require('merge-options')
 // @ts-ignore no types
 const toMultiaddr = require('uri-to-multiaddr')
 const LOG = 'ipfs:http-gateway'
@@ -64,7 +65,10 @@ class HttpGateway {
     this._gatewayServers = []
   }
 
-  async start () {
+  /**
+   * @param {any} options
+   */
+  async start (options) {
     this._log('starting')
 
     const ipfs = this._ipfs
@@ -73,8 +77,9 @@ class HttpGateway {
     const config = await ipfs.config.getAll()
     const addresses = config.Addresses || { Swarm: [], Gateway: [] }
     const gatewayAddrs = addresses?.Gateway || []
+    const serverCreatorFn = options && options.serverCreator || serverCreator
 
-    this._gatewayServers = await serverCreator(gatewayAddrs, this._createGatewayServer, ipfs)
+    this._gatewayServers = await serverCreatorFn(gatewayAddrs, this._createGatewayServer, ipfs)
 
     this._log('started')
   }
@@ -83,9 +88,10 @@ class HttpGateway {
    * @param {string} host
    * @param {string} port
    * @param {IPFS} ipfs
+   * @param {Record<string, any>} opts
    */
-  async _createGatewayServer (host, port, ipfs) {
-    const server = Hapi.server({
+  async _createGatewayServer (host, port, ipfs, opts) {
+    const server = Hapi.server(mergeOptions({
       host,
       port,
       routes: {
@@ -94,7 +100,7 @@ class HttpGateway {
           emptyStatusCode: 200
         }
       }
-    })
+    }, opts))
     server.app.ipfs = ipfs
 
     await server.register({

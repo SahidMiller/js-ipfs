@@ -3,6 +3,7 @@
 const Hapi = require('@hapi/hapi')
 const Pino = require('hapi-pino')
 const debug = require('debug')
+const mergeOptions = require('merge-options')
 const { Multiaddr } = require('multiaddr')
 // @ts-ignore no types
 const toMultiaddr = require('uri-to-multiaddr')
@@ -36,11 +37,11 @@ function hapiInfoToMultiaddr (info) {
 
 /**
  * @param {string | string[]} serverAddrs
- * @param {(host: string, port: string, ipfs: IPFS, cors: Record<string, any>) => Promise<Server>} createServer
+ * @param {(host: string, port: string, ipfs: IPFS, opts: Record<string, any>) => Promise<Server>} createServer
  * @param {IPFS} ipfs
- * @param {Record<string, any>} cors
+ * @param {Record<string, any>} opts
  */
-async function serverCreator (serverAddrs, createServer, ipfs, cors) {
+async function serverCreator (serverAddrs, createServer, ipfs, opts) {
   serverAddrs = serverAddrs || []
   // just in case the address is just string
   serverAddrs = Array.isArray(serverAddrs) ? serverAddrs : [serverAddrs]
@@ -49,7 +50,7 @@ async function serverCreator (serverAddrs, createServer, ipfs, cors) {
   const servers = []
   for (const address of serverAddrs) {
     const addrParts = address.split('/')
-    const server = await createServer(addrParts[2], addrParts[4], ipfs, cors)
+    const server = await createServer(addrParts[2], addrParts[4], ipfs, opts)
     await server.start()
     server.info.ma = hapiInfoToMultiaddr(server.info)
     servers.push(server)
@@ -102,8 +103,9 @@ class HttpApi {
 
   /**
    * Starts the IPFS HTTP server
+   * @param {any} options
    */
-  async start () {
+  async start (options) {
     this._log('starting')
 
     const ipfs = this._ipfs
@@ -111,15 +113,32 @@ class HttpApi {
     const config = await ipfs.config.getAll()
     const headers = (config.API && config.API.HTTPHeaders) || {}
     const apiAddrs = (config.Addresses && config.Addresses.API) || []
+    const corsOrigins = headers['Access-Control-Allow-Origin'] || [];
+    const enableCors = Boolean(corsOrigins.length)
 
-    this._apiServers = await serverCreator(apiAddrs, this._createApiServer, ipfs, {
-      origin: headers['Access-Control-Allow-Origin'] || [],
-      credentials: Boolean(headers['Access-Control-Allow-Credentials'])
-    })
+    const serverCreatorFn = options.serverCreator || serverCreator
+    const defaultOptions = {
+      routes: {
+        cors: enableCors ? {
+          origin: corsOrigins,
+          credentials: Boolean(headers['Access-Control-Allow-Credentials']),
+          additionalHeaders: ['X-Stream-Output', 'X-Chunked-Output', 'X-Content-Length'],
+          additionalExposedHeaders: ['X-Stream-Output', 'X-Chunked-Output', 'X-Content-Length'],
+        } : false,
+        response: {
+          emptyStatusCode: 200
+        }
+      }
+    }
 
-    // for the CLI to know the whereabouts of the API
-    // @ts-ignore - ipfs.repo.setApiAddr is not part of the core api
-    await ipfs.repo.setApiAddr(this._apiServers[0].info.ma)
+    this._apiServers = await serverCreatorFn(apiAddrs, this._createApiServer, ipfs, defaultOptions)
+
+    if (this._apiServers[0]) {
+      // for the CLI to know the whereabouts of the API
+      const apiServer = this._apiServers[0].info
+      // @ts-ignore - ipfs.repo.setApiAddr is not part of the core api
+      await ipfs.repo.setApiAddr(apiServer.ma)
+    }
 
     this._log('started')
   }
@@ -128,31 +147,18 @@ class HttpApi {
    * @param {string} host
    * @param {string} port
    * @param {IPFS} ipfs
-   * @param {Record<string, any>} cors
+   * @param {Record<string, any>} opts
    */
-  async _createApiServer (host, port, ipfs, cors) {
-    cors = {
-      ...cors,
-      additionalHeaders: ['X-Stream-Output', 'X-Chunked-Output', 'X-Content-Length'],
-      additionalExposedHeaders: ['X-Stream-Output', 'X-Chunked-Output', 'X-Content-Length']
-    }
-
-    const enableCors = Boolean(cors.origin?.length)
-
-    const server = Hapi.server({
+  async _createApiServer (host, port, ipfs, opts) {
+    
+    const server = Hapi.server(mergeOptions({
       host,
       port,
-      routes: {
-        cors: enableCors ? cors : false,
-        response: {
-          emptyStatusCode: 200
-        }
-      },
       // Disable Compression
       // Why? Streaming compression in Hapi is not stable enough,
       // it requires bug-prone hacks such as https://github.com/hapijs/hapi/issues/3599
       compression: false
-    })
+    }, opts))
     server.app.ipfs = ipfs
 
     await server.register({
@@ -210,7 +216,7 @@ class HttpApi {
 
         // If these are set, check them against the configured list
         if (origin || referer) {
-          if (!isAllowedOrigin(origin || referer, cors.origin)) {
+          if (!isAllowedOrigin(origin || referer, opts?.routes?.cors?.origin)) {
             // Hapi will not allow an empty CORS origin list so we have to manually
             // reject the request if CORS origins have not been configured
             throw Boom.forbidden()

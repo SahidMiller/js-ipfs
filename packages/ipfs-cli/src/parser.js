@@ -1,9 +1,8 @@
 'use strict'
 
-const yargs = require('yargs/yargs')(process.argv.slice(2))
 const utils = require('./utils')
 
-const parser = yargs
+const createParser = (yargs) => yargs
   .option('silent', {
     desc: 'Write no output',
     type: 'boolean',
@@ -35,4 +34,4 @@ const parser = yargs
   .strict()
   .completion()
 
-module.exports = parser
+module.exports = createParser

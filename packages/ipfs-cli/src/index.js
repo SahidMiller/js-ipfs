@@ -1,6 +1,5 @@
 'use strict'
-
-const parser = require('./parser')
+const createParser = require('./parser')
 const commandAlias = require('./command-alias')
 const errCode = require('err-code')
 
@@ -14,6 +13,10 @@ module.exports = (command, ctxMiddleware) => {
 
   return new Promise((resolve, reject) => {
     try {
+      const parser = createParser(
+        require("yargs/yargs")(process.argv.slice(2))
+      );
+
       parser
         .middleware(ctxMiddleware)
         .onFinishCommand((data) => {
